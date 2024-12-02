@@ -39,7 +39,8 @@ RUN python3.9 -m pip install meson ninja
 RUN ./configure.py
 WORKDIR /bitwuzla/build
 RUN meson compile
-
+# Environment variables to ensure bitwuzla commands are available
+ENV PATH="${PATH}:${WORKDIR}/src/main"
 
 # Install Racket
 RUN curl -sSL https://mirror.racket-lang.org/installers/8.7/racket-8.7-x86_64-linux.sh -o racket-install.sh \
