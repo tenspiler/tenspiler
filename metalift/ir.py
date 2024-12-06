@@ -1116,7 +1116,7 @@ class List(Generic[T], Object):
 
     @property
     def is_matrix(self) -> bool:
-        return is_matrix_type(self.type)
+        return is_matrix_type(self.type) or is_nested_list_type(self.type)
 
     @property
     def is_tensor3d(self) -> bool:
@@ -1889,6 +1889,9 @@ class Var(Expr):
     def __init__(self, name: str, ty: ObjectT) -> None:
         Expr.__init__(self, ty, [name])
 
+    def set_name(self, name: str) -> None:
+        self.args[0] = name
+
     def name(self) -> str:
         return self.args[0]  # type: ignore
 
@@ -2529,6 +2532,9 @@ class Call(Expr):
                         callStr += a.to_rosette() + " "
                 callStr += ")"
                 return callStr
+            elif self.name() == "ite":
+                args = self.arguments()
+                return Ite(args[0], args[1], args[2]).to_rosette()
             else:
                 return (
                     "("
@@ -3255,6 +3261,9 @@ class FnDecl(Expr):
         arg_types = tuple([arg.type for arg in args])
         fn_type = make_fn_type(returnT, *arg_types)
         Expr.__init__(self, fn_type, [name, body, *args])
+
+    def set_name(self, name: str) -> None:
+        self.args[0] = name
 
     def name(self) -> str:
         return self.args[0]  # type: ignore
