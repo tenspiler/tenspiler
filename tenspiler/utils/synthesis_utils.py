@@ -1,9 +1,24 @@
+from enum import Enum
 from pathlib import Path
+from typing import Callable
 
-from metalift.frontend.llvm import Driver
+from metalift.frontend.llvm import Driver, InvGrammar
+from metalift.ir import Axiom, Expr, FnDecl, FnDeclRecursive
 from metalift.synthesis_common import SynthesisFailed, VerificationFailed
+from metalift.vc_util import and_objects
 from tenspiler.codegen.numpy_codegen import numpy_codegen
 from tenspiler.codegen.utils import DataType
+from tenspiler.constants import TENSPILER_FN_NAME_TO_AXIOMS, TENSPILER_FNS
+from tenspiler.llm.parser import check_solution
+from tenspiler.llm.scripts.models import LLMModel
+from tenspiler.llm.scripts.prompts import get_inv_prompt, get_ps_prompt
+from tenspiler.llm.scripts.utils import (
+    TEMPLATE_ERR,
+    is_single_loop,
+    replace_in_calls,
+    verify_benchmark,
+    verify_benchmark_smt,
+)
 
 tpcc_benchmarks = {
     "normal_blend_f",
@@ -137,3 +152,207 @@ def run_synthesis_algorithm(
             list_bound += 1
         except Exception as e:
             raise e
+
+
+class VerificationMethod(Enum):
+    NONE = "none"
+    ROSETTE = "rosette"
+    SMT = "smt"
+
+
+def run_llm_synthesis_algorithm(
+    *,
+    driver: Driver,
+    source_code: str,
+    suite_name: str,
+    benchmark_name: str,
+    llm_model: LLMModel,
+    max_num_ps_sols: int = 10,
+    max_num_inv_sols: int = 10,
+    dsl_fns: list[FnDecl | FnDeclRecursive] = TENSPILER_FNS,
+    dsl_fn_name_to_axioms: dict[str, list[Axiom]] = TENSPILER_FN_NAME_TO_AXIOMS,
+    verification_method: VerificationMethod = VerificationMethod.ROSETTE,
+) -> None:
+    """
+    The flow of the function is as follows:
+    1. Start with asking the model to rewrite the function.
+    2. Check if solution passes the parser. If it does, proceed. Otherwise, give parser feedback and ask the model to fix the function. Repeat this step for `max_parser_tries` times.
+    4. Return the solution. Otherwise, return None.
+
+    we return a list with maximum length of `max_num_tries` and each element containing the following information:
+    - solutions: A list of solutions that we tried to pass to parser. Each solution is in the form of (solution, feedback, time_taken) tuple.
+    """
+    # First we need to get DSL code
+    dsl_code = "\n\n".join(fn.to_python() for fn in dsl_fns)
+
+    # First we need to generate prompts
+    ps_prompt = get_ps_prompt(dsl_code=dsl_code, source_code=source_code)
+
+    # Get result from LLM
+    ps_sols: list[str] = []
+    found_sol = False
+    for ps_sol_index in range(max_num_ps_sols):
+        # First we get a new solution. If there are previous incorrect solutions, we show them to the model.
+        print(f"===== Starting iteration {ps_sol_index} =====")
+        inv_template_message = {"role": "user", "content": ps_prompt}
+
+        if len(ps_sols) > 0:
+            messages_for_new_sol = [
+                inv_template_message,
+                {"role": "assistant", "content": "\n".join(ps_sols)},
+                {"role": "user", "content": TEMPLATE_ERR},
+            ]
+        else:
+            messages_for_new_sol = [inv_template_message]
+        # TODO(jie)
+        # ps_sol = get_solution_from_llm(llm_model, messages_for_new_sol)
+        # ps_sol = """
+        # def linear_dodge_8(base: List[List[int]], active: List[List[int]]) -> List[List[int]]:
+        #     return matrix_elemwise_add(base, active)
+        # """
+        ps_sol = """
+        def darken_blend_8(base: List[List[int]], active: List[List[int]]) -> List[List[int]]:
+            return matrix_selection_two_args(base, active, lambda x, y: ite_int(x > y, y, x))
+        """
+        print("Generated new PS solution", ps_sol)
+        ps_sols.append(ps_sol)
+
+        # Check if the solution passes the parser. If it does, we can continue to the next step. Otherwise, we would like to generate another PS.
+        lambda_exprs: dict[Expr, str] = {}
+        arg_name_to_count: dict[str, int] = {}
+        try:
+            _, ps_fn_decls, ps_inv_calls = check_solution(
+                solution=ps_sol,
+                expected_num_funcs=1,
+                dsl_code=dsl_code,
+                lambda_exprs=lambda_exprs,
+                arg_name_to_count=arg_name_to_count,
+            )
+            print("Passed the parser, continuing to invariant generation")
+        except Exception as e:
+            print("Failed to pass the parser", e)
+            print("Skipping invariant generation")
+            continue
+
+        # Generate the invariant
+        inv_prompt = get_inv_prompt(
+            suite_name=suite_name, benchmark_name=benchmark_name, dsl_code=dsl_code
+        )
+        inv_sols: list[str] = []
+        for inv_sol_index in range(max_num_inv_sols):
+            print(f"----- Generating {inv_sol_index} invariant -----")
+            inv_template_message = {"role": "user", "content": inv_prompt}
+
+            if len(inv_sols) > 0:
+                messages_for_new_sol = [
+                    inv_template_message,
+                    {"role": "assistant", "content": "\n".join(inv_sols)},
+                    {"role": "user", "content": TEMPLATE_ERR},
+                ]
+            else:
+                messages_for_new_sol = [inv_template_message]
+            # TODO(jie)
+            # inv_sol = get_solution_from_llm(llm_model, messages_for_new_sol)
+            # inv_sol = f"""
+            # def invariant1(row: int, base: List[List[int]], active: List[List[int]], out: List[List[int]]) -> bool:
+            #     return row >= 0 and row <= len(base) and out == matrix_elemwise_add(base[:row], active[:row])
+
+            # def invariant2(row: int, col: int, base: List[List[int]], active: List[List[int]], row_vec: List[int], out: List[List[int]]) -> bool:
+            #     return row >= 0 and row < len(base) and col >= 0 and col <= len(base[0]) and \
+            #         row_vec == vec_elemwise_add(base[row][:col], active[row][:col]) and \
+            #         out == matrix_elemwise_add(base[:row], active[:row])
+            # """
+            inv_sol = """
+            def invariant1(row: int, base: List[List[int]], active: List[List[int]], out: List[List[int]]) -> bool:
+                return row >= 0 and row <= len(base) and out == matrix_selection_two_args(base[:row], active[:row], lambda x, y: ite_int(x > y, y, x))
+
+            def invariant2(row: int, col: int, base: List[List[int]], active: List[List[int]], row_vec: List[int], out: List[List[int]]) -> bool:
+                return row >= 0 and row < len(base) and col >= 0 and col <= len(base[0]) and \
+                    row_vec == selection_two_args(base[row][:col], active[row][:col], lambda x, y: ite_int(x > y, y, x)) and \
+                    out == matrix_selection_two_args(base[:row], active[:row], lambda x, y: ite_int(x > y, y, x))
+            """
+            print("Generated new INV solution", inv_sol)
+            inv_sols.append(inv_sol)
+
+            try:
+                _, inv_fn_decls, inv_in_calls = check_solution(
+                    solution=inv_sol,
+                    expected_num_funcs=1 if is_single_loop(benchmark_name) else 2,
+                    dsl_code=dsl_code,
+                    lambda_exprs=lambda_exprs,
+                    arg_name_to_count=arg_name_to_count,
+                )
+                print("Passed the parser, continuing to verification")
+            except Exception as e:
+                print("Failed to pass the parser", e)
+                continue
+
+            # Generate VC.
+            # Write assertions
+            in_calls = [*ps_inv_calls, *inv_in_calls]
+            synthesized_fn_decls = [*ps_fn_decls, *inv_fn_decls]
+            vc = and_objects(*driver.asserts).src.simplify()
+            vc = replace_in_calls(vc, in_calls)
+
+            # Verify the solution
+            if verification_method == VerificationMethod.SMT:
+                verified = verify_benchmark_smt(
+                    driver=driver,
+                    benchmark_name=benchmark_name,
+                    synthesized_fn_decls=synthesized_fn_decls,
+                    in_calls=in_calls,
+                    dsl_fns=dsl_fns,
+                    vc=vc,
+                    dsl_fn_name_to_axioms=dsl_fn_name_to_axioms,
+                )
+            elif verification_method == VerificationMethod.ROSETTE:
+                verified = verify_benchmark(
+                    driver=driver,
+                    benchmark_name=benchmark_name,
+                    synthesized_fn_decls=synthesized_fn_decls,
+                    in_calls=in_calls,
+                    dsl_fns=dsl_fns,
+                    vc=vc,
+                )
+            elif verification_method == VerificationMethod.NONE:
+                print("Skpping verification...")
+            else:
+                raise Exception(
+                    f"Unsupported verification method {verification_method}"
+                )
+
+            if verified:
+                print("Solution verified")
+                found_sol = True
+                break
+
+        # If we have a correct solution, we can break out of the loop.
+        if found_sol:
+            break
+
+    if not found_sol:
+        raise Exception("No correct solution found")
+
+    print("Found PS solution")
+    print(ps_sol)
+
+
+def llm_analyze(
+    driver: Driver,
+    llvm_filepath: str,
+    loops_filepath: str,
+    fn_name: str,
+    target_lang_fn: Callable[[], list[FnDeclRecursive | FnDecl]],
+    inv_in_scope_vars: dict[str, list[str]] = {},
+):
+    return driver.analyze(
+        llvm_filepath=llvm_filepath,
+        loops_filepath=loops_filepath,
+        fn_name=fn_name,
+        target_lang_fn=target_lang_fn,
+        ps_grammar=None,
+        inv_grammars={
+            inv_name: InvGrammar(None, in_scope_var_names=var_names)
+            for inv_name, var_names in inv_in_scope_vars.items()
+        },
+    )
