@@ -6,10 +6,10 @@ from metalift.ir import Bool, FnDecl, FnDeclRecursive, Int
 from metalift.ir import List as mlList
 from metalift.ir import Object, choose
 from metalift.vc_util import and_objects
+from tenspiler.axioms import reduce_max_axiom
 from tenspiler.codegen.utils import DataType
 from tenspiler.tenspiler_common import call_reduce_max, reduce_max
 from tenspiler.utils.synthesis_utils import run_synthesis_algorithm
-from tenspiler.axioms_tenspiler import reduce_max_axiom
 
 
 def softmax_part1_target_lang() -> List[Union[FnDecl, FnDeclRecursive]]:
@@ -17,11 +17,14 @@ def softmax_part1_target_lang() -> List[Union[FnDecl, FnDeclRecursive]]:
 
 
 def softmax_part1_ps_grammar(
-    writes: List[Object], reads: List[Object], in_scope: List[Object], relaxed: bool
+    writes: List[Object],
+    reads: List[Object],
+    in_scope: List[Object],
+    relaxed_grammar: bool,
 ) -> Bool:
     ret_val = writes[0]
     input, max_pos = reads
-    if relaxed:
+    if relaxed_grammar:
         lower_bound = choose(Int(0), Int(1), Int(2))
         upper_bound = choose(max_pos, max_pos - 1, max_pos + 1)
         vec = input[lower_bound:upper_bound]
@@ -32,11 +35,14 @@ def softmax_part1_ps_grammar(
 
 
 def softmax_part1_inv0_grammar(
-    writes: List[Object], reads: List[Object], in_scope: List[Object], relaxed: bool
+    writes: List[Object],
+    reads: List[Object],
+    in_scope: List[Object],
+    relaxed_grammar: bool,
 ) -> Bool:
     input, max_pos = reads
     i, max_val = writes
-    if relaxed:
+    if relaxed_grammar:
         lower_bound = choose(Int(0), Int(1), Int(2))
         upper_bound = choose(max_pos, max_pos - 1, max_pos + 1)
         vec = input[lower_bound:i]

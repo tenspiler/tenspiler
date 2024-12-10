@@ -1,4 +1,3 @@
-import typing
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from metalift.frontend.llvm import Driver, InvGrammar
@@ -80,6 +79,7 @@ VEC_MAP = "vec_map"
 
 # Other helper functions
 MATRIX_VEC_MUL = "matrix_vec_mul"
+ITE_INT = "ite_int"
 
 TensorT = Union[mlList[Int], Matrix[Int], Tensor3D[Int]]
 
@@ -263,7 +263,7 @@ def call_reduce_max(lst) -> Int:
 
 
 def call_selection_two_args(
-    left: mlList[Int], right: mlList[Int], select_fn: Fn[typing.Tuple[Int, Int, Int]]
+    left: mlList[Int], right: mlList[Int], select_fn: Fn[tuple[Int, Int, Int]]
 ) -> mlList[Int]:
     return call(SELECTION_TWO_ARGS, mlList[Int], left, right, select_fn)
 
@@ -273,7 +273,7 @@ def call_dissolve_selection_two_args(
     right: mlList[Int],
     opacity: Int,
     rand_cons: Int,
-    select_fn: Fn[typing.Tuple[Int, Int, Int]],
+    select_fn: Fn[tuple[Int, Int, Int]],
 ) -> mlList[Int]:
     return call(
         DISSOLVE_SELECTION_TWO_ARGS,
@@ -287,7 +287,7 @@ def call_dissolve_selection_two_args(
 
 
 def call_matrix_selection_two_args(
-    left: Matrix[Int], right: Matrix[Int], select_fn: Fn[typing.Tuple[Int, Int, Int]]
+    left: Matrix[Int], right: Matrix[Int], select_fn: Fn[tuple[Int, Int, Int]]
 ) -> Matrix[Int]:
     return call(MATRIX_SELECTION_TWO_ARGS, Matrix[Int], left, right, select_fn)
 
@@ -321,7 +321,7 @@ def call_dissolve_matrix_selection_two_args(
     right: Matrix[Int],
     opacity: Int,
     rand_cons: Int,
-    select_fn: Fn[typing.Tuple[Int, Int, Int]],
+    select_fn: Fn[tuple[Int, Int, Int]],
 ) -> Matrix[Int]:
     return call(
         DISSOLVE_MATRIX_SELECTION_TWO_ARGS,
@@ -346,7 +346,7 @@ def call_map_int_to_int(x: Int) -> Int:
     return call(MAP_INT_TO_INT, Int, x)
 
 
-def call_vec_map(x: mlList[Int], map_fn: Fn[typing.Tuple[Int, Int]]) -> mlList[Int]:
+def call_vec_map(x: mlList[Int], map_fn: Fn[tuple[Int, Int]]) -> mlList[Int]:
     return call(VEC_MAP, mlList[Int], x, map_fn)
 
 
@@ -386,6 +386,7 @@ int_x = Int("int_x")
 int_y = Int("int_y")
 opacity = Int("opacity")
 rand_cons = Int("rand_cons")
+cond = Bool("cond")
 
 
 def reduce_sum_body(lst: List[Int]) -> Int:
@@ -418,7 +419,8 @@ def reduce_max_body(lst: mlList[Int]) -> Int:
     lst_rest = lst[1:]
     recursed = call_reduce_max(lst_rest)
     general_answer = ite(cur > recursed, cur, recursed)
-    return ite(vec_size <= 1, lst[0], general_answer)
+    # TODO(sahil)
+    return ite(vec_size < 1, 0 - Int(32), ite(vec_size == 1, lst[0], general_answer))
 
 
 reduce_max = fn_decl_recursive(REDUCEMAX, Int, reduce_max_body(x), x)
@@ -436,6 +438,8 @@ def matrix_vec_mul_body(matrix: Matrix[Int], vec: mlList[Int]) -> mlList[Int]:
 matrix_vec_mul = fn_decl_recursive(
     MATRIX_VEC_MUL, mlList[Int], matrix_vec_mul_body(matrix_x, x), matrix_x, x
 )
+
+ite_int = fn_decl(ITE_INT, Int, ite(cond, int_x, int_y), cond, int_x, int_y)
 
 
 # Helper functions for selections
@@ -588,7 +592,7 @@ map_int_to_int = fn_decl(MAP_INT_TO_INT, Int, None, int_x)
 
 
 def matrix_selection_two_args_body(
-    left: Matrix[Int], right: Matrix[Int], select_fn: Fn[typing.Tuple[Int, Int, Int]]
+    left: Matrix[Int], right: Matrix[Int], select_fn: Fn[tuple[Int, Int, Int]]
 ) -> Matrix[Int]:
     cur = call_selection_two_args(left[0], right[0], select_fn)
     recursed = call_matrix_selection_two_args(left[1:], right[1:], select_fn)
@@ -615,7 +619,7 @@ def dissolve_matrix_selection_two_args_body(
     right: Matrix[Int],
     opacity: Int,
     rand_cons: Int,
-    dissolve_select_fn: Fn[typing.Tuple[Int, Int, Int, Int]],
+    dissolve_select_fn: Fn[tuple[Int, Int, Int, Int]],
 ) -> Matrix[Int]:
     cur = call_dissolve_selection_two_args(
         left[0], right[0], opacity, rand_cons, dissolve_select_fn
@@ -646,7 +650,7 @@ dissolve_matrix_selection_two_args_fn_decl = fn_decl_recursive(
 
 
 def selection_two_args_body(
-    left: mlList[Int], right: mlList[Int], select_fn: Fn[typing.Tuple[Int, Int, Int]]
+    left: mlList[Int], right: mlList[Int], select_fn: Fn[tuple[Int, Int, Int]]
 ) -> mlList[Int]:
     cur = call_value(select_fn, left[0], right[0])
     recursed = call_selection_two_args(left[1:], right[1:], select_fn)
@@ -673,7 +677,7 @@ def dissolve_selection_two_args_body(
     right: mlList[Int],
     opacity: Int,
     rand_cons: Int,
-    dissolve_select_fn: Fn[typing.Tuple[Int, Int, Int, Int, Int]],
+    dissolve_select_fn: Fn[tuple[Int, Int, Int, Int, Int]],
 ) -> mlList[Int]:
     cur = call_value(dissolve_select_fn, left[0], right[0], opacity, rand_cons)
     recursed = call_dissolve_selection_two_args(
@@ -1203,7 +1207,7 @@ scalar_matrix_sub = fn_decl_recursive(
 )
 
 
-def vec_map_body(vec: mlList[Int], map_fn: Fn[typing.Tuple[Int, Int]]) -> mlList[Int]:
+def vec_map_body(vec: mlList[Int], map_fn: Fn[tuple[Int, Int]]) -> mlList[Int]:
     cur = call_value(map_fn, vec[0])
     recursed = call_vec_map(vec[1:], map_fn)
     return ite(vec.len() < 1, mlList.empty(Int), recursed.prepend(cur))
@@ -1416,7 +1420,10 @@ def get_matrix_computation_holing_search_space(
 
     # inv0 grammar
     def inv0_grammar_fn(
-        writes: List[Object], reads: List[Object], in_scope: List[Object], relaxed: bool
+        writes: List[Object],
+        reads: List[Object],
+        in_scope: List[Object],
+        relaxed_grammar: bool,
     ) -> Bool:
         out, col, pixel, row, row_vec = writes
         base, active = reads
@@ -1435,7 +1442,10 @@ def get_matrix_computation_holing_search_space(
         )
 
     def inv1_grammar_fn(
-        writes: List[Object], reads: List[Object], in_scope: List[Object], relaxed: bool
+        writes: List[Object],
+        reads: List[Object],
+        in_scope: List[Object],
+        relaxed_grammar: bool,
     ) -> Bool:
         col, pixel, row_vec = writes
         out, row = in_scope
@@ -1463,7 +1473,10 @@ def get_matrix_computation_holing_search_space(
         )
 
     def ps_grammar_fn(
-        writes: List[Object], reads: List[Object], in_scope: List[Object], relaxed: bool
+        writes: List[Object],
+        reads: List[Object],
+        in_scope: List[Object],
+        relaxed_grammar: bool,
     ) -> Bool:
         ret_val = writes[0]
         base, active = reads
@@ -1630,7 +1643,10 @@ def get_matrix_select_holing_search_space(
 
     # inv0 grammar
     def inv0_grammar_fn(
-        writes: List[Object], reads: List[Object], in_scope: List[Object], relaxed: bool
+        writes: List[Object],
+        reads: List[Object],
+        in_scope: List[Object],
+        relaxed_grammar: bool,
     ) -> Bool:
         writes_by_name = {write_var.var_name(): write_var for write_var in writes}
         out = writes_by_name["agg.result"]
@@ -1655,7 +1671,10 @@ def get_matrix_select_holing_search_space(
         )
 
     def inv1_grammar_fn(
-        writes: List[Object], reads: List[Object], in_scope: List[Object], relaxed: bool
+        writes: List[Object],
+        reads: List[Object],
+        in_scope: List[Object],
+        relaxed_grammar: bool,
     ) -> Bool:
         writes_by_name = {write_var.var_name(): write_var for write_var in writes}
         col = writes_by_name["col"]
@@ -1697,7 +1716,10 @@ def get_matrix_select_holing_search_space(
         )
 
     def ps_grammar_fn(
-        writes: List[Object], reads: List[Object], in_scope: List[Object], relaxed: bool
+        writes: List[Object],
+        reads: List[Object],
+        in_scope: List[Object],
+        relaxed_grammar: bool,
     ) -> Bool:
         ret_val = writes[0]
         reads_by_name = {read_var.var_name(): read_var for read_var in reads}

@@ -192,6 +192,8 @@ class Expr:
                 f(self.body()),
                 *[f(a) for a in self.arguments()],
             )
+        elif isinstance(self, Axiom):
+            return Axiom(f(self.e()), *[f(var) for var in self.vars()])
         else:
             raise Exception("NYI: %s" % self)
 
@@ -655,10 +657,10 @@ def parse_type_ref_to_obj(t: TypeRef) -> ObjectT:
         # TODO : how to support different contained types
         return Set[Int]
     elif ty_str in {"%struct.tup*"}:
-        return Tuple[typing.Tuple[Int, Int]]
+        return Tuple[tuple[Int, Int]]
     elif ty_str.startswith("%struct.tup."):
         contained_types = [Int for i in range(int(t[-2]) + 1)]
-        return Tuple[typing.Tuple[contained_types]]  # type: ignore
+        return Tuple[tuple[contained_types]]  # type: ignore
     else:
         raise Exception(f"no type defined for {ty_str}")
 
@@ -729,9 +731,9 @@ def choose(*objects: Union["Object", Expr]) -> "Object":
 
 
 def ite(
-    cond: "Bool",
-    then_object: "Object",
-    else_object: "Object",
+    cond: "Object | Expr",
+    then_object: "Object | Expr",
+    else_object: "Object | Expr",
 ) -> "Object":
     ite_type = then_object.type
     ite_expr = Ite(
@@ -795,11 +797,11 @@ def make_tuple(*objects: Union["Object", Expr]) -> "Tuple":  # type: ignore
 
 
 def make_tuple_type(*containedT: Union[type, _GenericAlias]) -> Type["Tuple"]:  # type: ignore
-    return Tuple[typing.Tuple[containedT]]  # type: ignore
+    return Tuple[tuple[containedT]]  # type: ignore
 
 
 def make_fn_type(*containedT: ObjectT) -> Type["Fn"]:  # type: ignore
-    return Fn[typing.Tuple[containedT]]  # type: ignore
+    return Fn[tuple[containedT]]  # type: ignore
 
 
 class ObjectWrapper:
@@ -1116,7 +1118,7 @@ class List(Generic[T], Object):
 
     @property
     def is_matrix(self) -> bool:
-        return is_matrix_type(self.type)
+        return is_matrix_type(self.type) or is_nested_list_type(self.type)
 
     @property
     def is_tensor3d(self) -> bool:
@@ -1728,10 +1730,10 @@ TupleContainedT = TypeVar("TupleContainedT")
 class Tuple(Generic[TupleContainedT], Object):
     def __init__(
         self,
-        containedT: typing.Tuple[Union[type, _GenericAlias]],
+        containedT: tuple[Union[type, _GenericAlias]],
         value: Optional[Union[Expr, str]] = None,
     ) -> None:
-        full_type = Tuple[typing.Tuple[containedT]]  # type: ignore
+        full_type = Tuple[tuple[containedT]]  # type: ignore
         src: Expr
         if value is None:  # a symbolic variable
             src = Var("v", full_type)
@@ -1766,7 +1768,7 @@ class Tuple(Generic[TupleContainedT], Object):
         return len(self.containedT)
 
     @staticmethod
-    def default_value() -> "Tuple[typing.Tuple[Int, Int]]":
+    def default_value() -> "Tuple[tuple[Int, Int]]":
         return Tuple((Int, Int), None)  # type: ignore
 
     @staticmethod
@@ -1784,7 +1786,7 @@ class Tuple(Generic[TupleContainedT], Object):
 
     @property
     def type(self) -> Type["Tuple"]:  # type: ignore
-        return Tuple[typing.Tuple[self.containedT]]  # type: ignore
+        return Tuple[tuple[self.containedT]]  # type: ignore
 
     # TODO: handle contained type
     @staticmethod
@@ -1807,10 +1809,10 @@ FnContainedT = TypeVar("FnContainedT")
 class Fn(Generic[FnContainedT], Object):
     def __init__(
         self,
-        containedT: typing.Tuple[Union[type, _GenericAlias]],
+        containedT: tuple[Union[type, _GenericAlias]],
         value: Optional[Union["FnDeclRecursive", "FnDecl", str]] = None,
     ) -> None:
-        self._full_type = Fn[typing.Tuple[containedT]]  # type: ignore
+        self._full_type = Fn[tuple[containedT]]  # type: ignore
         src: Expr
         if value is None:  # a symbolic variable
             src = Var("v", self._full_type)
@@ -1888,6 +1890,9 @@ class Fn(Generic[FnContainedT], Object):
 class Var(Expr):
     def __init__(self, name: str, ty: ObjectT) -> None:
         Expr.__init__(self, ty, [name])
+
+    def set_name(self, name: str) -> None:
+        self.args[0] = name
 
     def name(self) -> str:
         return self.args[0]  # type: ignore
@@ -2429,9 +2434,6 @@ class Ite(Expr):
     def to_python(self) -> str:
         return f"({self.e1().to_python()} if {self.c().to_python()} else {self.e2().to_python()})"
 
-    # def accept(self, v: "Visitor[T]") -> T:
-    #     return v.visit_Ite(self)
-
 
 class Let(Expr):
     def __init__(self, v: Expr, e: Expr, e2: Expr) -> None:
@@ -2529,6 +2531,9 @@ class Call(Expr):
                         callStr += a.to_rosette() + " "
                 callStr += ")"
                 return callStr
+            elif self.name() == "ite":
+                args = self.arguments()
+                return Ite(args[0], args[1], args[2]).to_rosette()
             else:
                 return (
                     "("
@@ -2897,9 +2902,6 @@ class Axiom(Expr):
         ]
         return "(assert (forall ( %s ) %s ))" % (" ".join(vs), self.args[0].toSMT())
 
-    # def accept(self, v: "Visitor[T]") -> T:
-    #     return v.visit_Axiom(self)
-
 
 # the body of a synth-fun
 class Synth(Expr):
@@ -2914,6 +2916,9 @@ class Synth(Expr):
 
     def arguments(self) -> typing.List[Expr]:  # avoid name clash with Expr.args
         return self.args[2:]  # type: ignore
+
+    def set_body(self, body: Expr) -> None:
+        self.args[1] = body
 
     def to_rosette(
         self, writeChoicesTo: typing.Optional[Dict[str, "Expr"]] = None
@@ -3088,6 +3093,12 @@ class FnDeclRecursive(Expr):
     def set_name(self, name: str) -> None:
         self.args[0] = name
 
+    def set_body(self, body: Expr) -> None:
+        self.args[1] = body
+
+    def set_arguments(self, arguments: list[Expr]) -> None:
+        self.args[2:] = arguments
+
     def name(self) -> str:
         return self.args[0]  # type: ignore
 
@@ -3255,6 +3266,15 @@ class FnDecl(Expr):
         arg_types = tuple([arg.type for arg in args])
         fn_type = make_fn_type(returnT, *arg_types)
         Expr.__init__(self, fn_type, [name, body, *args])
+
+    def set_name(self, name: str) -> None:
+        self.args[0] = name
+
+    def set_body(self, body: Expr) -> None:
+        self.args[1] = body
+
+    def set_arguments(self, arguments: list[Expr]) -> None:
+        self.args[2:] = arguments
 
     def name(self) -> str:
         return self.args[0]  # type: ignore
