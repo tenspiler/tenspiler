@@ -1,8 +1,6 @@
 !shell.nix
 .DS_Store
 *.pyc
-# *.ll
-# *.loops
 tests/**/*.ll
 tests/**/*.loops
 llvm-pass/build/
@@ -20,6 +18,7 @@ nixos.qcow2
 .vscode/
 .venv/
 .3.9venv/
+.coverage
 tenspiler/data/
 *.o
 *_O3
@@ -49,3 +48,6 @@ tenspiler/generated_code/gaudi/generate_gaudi_benchmarks.py
 
 # tenspiler/generated_code/mlx/*
 tenspiler/generated_code/mlx/generate_mlx_benchmarks.py
+
+# Customly generated DSLs
+tenspiler/llm/dsl.py

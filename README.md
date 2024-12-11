@@ -1,34 +1,31 @@
-# Tenspiler
-Tenspiler is a verified lifting-based compiler that translates sequential programs written in C++ into tensor operations to leverage high performance tensor processing infrastructures such as deep learning frameworks and specialized hardware accelerators. Currently, Tenspiler supports six distinct software or backend backends including NumPy, TensorFlow, PyTorch, MLX (an ML framework on Apple silicon), TPC-C (C-based programming language for Intel’s
-Gaudi processor), and Gemmini (an open-source neural network accelerator generator).
+# LLMLift
+LLMLift is an LLM-based approach for building verified-lifting tools. LLMLift builds over [MetaLift](https://metalift.pages.dev/) by replacing its symbolic synthesis engine with an LLM.
 
-Check out [our paper](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ECOOP.2024.32) that was presented in ECOOP this year.
+Check out the full paper [here](https://openreview.net/forum?id=spwE9sLrfg), accepted at NeurIPS 2024.
 
 ## Getting started
 
 ### Installation
 
-#### Get the Metalift source code
-First, clone the Tenspiler repository:
-<!-- TODO: fix the naming -->
+#### Get source code
+First, clone the MetaLift repository with branch `llmlift`.
 ```bash
-git clone https://github.com/tenspiler/tenspiler.git
-cd tenspiler
+git clone --branch llmlift https://github.com/metalift/metalift.git
 ```
 
-#### Install the dependencies
-- [Racket](https://racket-lang.org) as the underlying language for the synthesis engine
-- [Rosette](https://github.com/emina/rosette), the synthesis engine that Tenspiler uses
-  - For maximum performance on Apple Silicon machines, you may want to replace the built-in Intel binary for Z3 with a native build
-- [CVC5](https://cvc5.github.io/), the theorem prover that Metalift uses to check candidate solutions
-- [Clang/LLVM 11](https://llvm.org), to compile input programs to LLVM IR for analysis
-- [CMake](https://cmake.org/), to build the custom LLVM pass
+#### Install dependencies
+LLMLift supports both bounded verification and full verification. Bounded verification is done using Rosette's verification API and full verification is performed using an SMT solver (cvc5).
+For bounded verification, install [Racket](https://racket-lang.org) and [Rosette](https://github.com/emina/rosette), and for full verification, install [cvc5](https://cvc5.github.io/).
 
-#### Install Python Dependencies
-We use [Poetry](https://python-poetry.org/) for dependency management. To set up the environment, simply install Poetry, run `poetry install`, and then `poetry shell` to enter an environment with the dependencies installed.
+LLMLift can translate source code written in C++, and requires the following dependencies for generating the specification (VC).
+  - [Clang/LLVM 11](https://llvm.org), to compile input programs to LLVM IR for analysis.
+  - [CMake](https://cmake.org/), to build the custom LLVM pass.
+
+#### Install Python dependencies
+We use [Poetry](https://python-poetry.org/) for dependency management. To set up the environment, simply install Poetry through `pip install poetry`. Then, run `poetry install` and `poetry shell` to enter an environment with dependencies installed.
 
 #### Build the custom LLVM pass
-Metalift makes use of a custom LLVM pass to organize the basic blocks in a way that is easier to analyze. To build the pass, we'll use CMake:
+LLMLift makes use of a custom LLVM pass to organize the basic blocks in a way that is easier to analyze. To build the pass, we'll use CMake:
 
 ```bash
 cd llvm-pass
@@ -39,26 +36,28 @@ make
 cd ../..
 ```
 
-#### Install Pre-commit Hooks
+#### Install pre-commit Hooks
 We use [pre-commit](https://pre-commit.com/) to enforce code style and formatting. To install the pre-commit hooks, run `pre-commit install`.
 
 ## Running Benchmarks
-We have evaluated Tenspiler on two sets of benchmarks, the **blend** benchmarks, which include 12 open-source implementations of blending modes in Photoshop, and the **Llama** benchmarks, which consist of 11 C++ inference kernels of Llama2 that capture operations such as computing activations, attention mechanisms, and layer norms. The benchmarks are available in the [`tenspiler/blend/`](./tenspiler/blend/) and the [`tenspiler/llama/`](./tenspiler/llama/) directories, respectively. Scripts for end-to-end synthesis and verification of the benchmarks live under the `benchmarks/{blend or llama}/holing/driver/` directories can be run using the following commands:
+We currently support Claude, Gemini, and GPT as the LLM model for synthesis. You can use any of these three models by setting their corresponding API keys (`OPENAI_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`) in a `.env` file.
+
+As examples, we include two sets of benchmarks, the **blend** benchmarks, which include 12 open-source implementations of blending modes in Photoshop, and the **Llama** benchmarks, which consist of 11 C++ inference kernels of Llama2 that capture operations such as computing activations, attention mechanisms, and layer norms. The benchmarks are available in the [`tenspiler/blend/llm`](./tenspiler/blend/llm) and the [`tenspiler/llama/llm`](./tenspiler/llama/llm) directories, respectively. Scripts for end-to-end synthesis and verification of the benchmarks live under the `benchmarks/(blend|llama)/llm/driver/` directories can be run using the following commands:
 
 ```bash
-python3 tenspiler/{blend or llama}/holing/driver/{benchmark_name}_driver.py
+python3 tenspiler/(blend|llama)/llm/driver/{benchmark_name}_driver.py
 ```
 
-To invoke code generation for your synthesized and verified solutions, simply import and invoke your desired code generation functions. For example, to generate MLX code for the `darken_blend_8` benchmark, you can add the following to the end of [`tenspiler/blend/holing/driver/darken_blend_8_driver.py`](./tenspiler/blend/holing/driver/darken_blend_8_driver.py)
+## Writing Your Own Verified-Lifting Tool Using LLM
+Follow the following instructions to build your own tool.
 
-```bash
-mlx_codegen(driver.get_actual_ps_fn_decl(), driver.synthesized_fns)
-```
-
-## TensIR
-Tenspiler is able to lift whatever is expressible in TensIR, Tenspiler's native intermediate language that captures many tensor operations. The full grammar can be found in the figure below.
-
-![TensIR grammar](./tenspiler/tensir.png)
-
-## Adding a new backend
-To add a new backend to Tenspiler, you simply need to add a code generation file named `{your backend name}_codegen.py` in the `tenspiler/codegen/` directory. You should only need to write simple syntax-driven translation rules to translate `tensIR` program into the target backend. Follow [the MLX code generation file](tenspiler/codegen/mlx_codegen.py) as an example! You can use the test cases present in [`tenspiler/tests/test_codegen.py`](./tenspiler/tests/test_codegen.py) to test your code generation logic.
+1. Describe the semantics of your DSL. An example is the set of some tensor functions we define [here](./tenspiler/constants.py#L74)
+2. Write your own driver file. This includes
+  - Compiling your C++ source code to `*.ll` and `*.loops` file using by running
+    ```
+    ./metalift/utils/llvm/compile-add-blocks /path/to/{your_file_name}.cc
+    ```
+    This will output `{your_file_name}.ll` and `{your_file_name}.loops` in the same directory as your input file.
+  - Supply some information about the loops in your programs, if any, to help LLMLift generate a template for synthesizing invariants. [Here](./tenspiler/blend/llm/driver/linear_dodge_8_driver.py#L19-L33) is an example. We are working to automate this step!
+  - Specify the output variable, as the example [here](./tenspiler/blend/llm/driver/linear_dodge_8_driver.py#L34). We are working to automate this step as well!
+3. For initial testing, we recommend using bounded verification, which can be set through the `verification_method` argument (example [here](./tenspiler/blend/llm/driver/linear_dodge_8_driver.py#L77)). Full verification requires additional axioms for the SMT solver to reason over your custom DSLs. You can see one example of the axiom [here](./tenspiler/axioms.py#L141-149). For more details on axioms on verified lifting, you can refer to the original MetaLift [paper](https://drops.dagstuhl.de/storage/00lipics/lipics-vol263-ecoop2023/LIPIcs.ECOOP.2023.38/LIPIcs.ECOOP.2023.38.pdf).
